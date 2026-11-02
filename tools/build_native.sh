@@ -45,6 +45,7 @@ url=https://github.com/mpereiraesaa/ps5-native-app-boilerplate.git
 # mpereiraesaa/PS5-Lapy-JB-Daemon and the SHA-256 of its lapy.elf. Bump both
 # together, after the new helper has run on a console.
 lapy_release=v0.3.2-experimental
+helper_download=
 lapy_elf_sha256=43fab6d8045b525403f025a7b15e313aeaeac174bba6bff19a32b0000293c647
 lapy_release=${PW_LAPY_RELEASE:-$lapy_release}
 lapy_elf_sha256=${PW_LAPY_ELF_SHA256:-$lapy_elf_sha256}
@@ -62,6 +63,8 @@ title_name=${PW_TITLE_NAME:-}
 title_icon=${PW_TITLE_ICON:-}
 data_root=${PW_DATA_ROOT:-/data/prospero-win}
 fixed_profile=${PW_FIXED_PROFILE:-}
+lapy_helper_elf_override=${PW_LAPY_HELPER_ELF:-}
+lapy_helper_manifest_override=${PW_LAPY_HELPER_MANIFEST:-}
 
 [[ $native_mode == wine64 ]] || {
     echo "PW_NATIVE_MODE must be wine64: the direct Win32 runtime was removed" >&2; exit 2; }
@@ -81,24 +84,34 @@ fixed_profile=${PW_FIXED_PROFILE:-}
     echo "PW_TITLE_NAME must not contain double quotes" >&2; exit 2; }
 [[ -z $title_icon || -f $title_icon ]] || {
     echo "PW_TITLE_ICON names no file" >&2; exit 2; }
-[[ $title_id == PPSA99995 || -n ${PW_LAPY_RELEASE:-} ]] || {
-    echo "PW_TITLE_ID needs PW_LAPY_RELEASE: the /data helper is built for one title" >&2; exit 2; }
+[[ $title_id == PPSA99995 || -n ${PW_LAPY_RELEASE:-} || -n $lapy_helper_elf_override ]] || {
+    echo "PW_TITLE_ID needs PW_LAPY_RELEASE or PW_LAPY_HELPER_ELF: the /data helper is built for one title" >&2; exit 2; }
 [[ $output_suffix =~ ^[A-Za-z0-9_-]*$ ]] || {
     echo "PW_OUTPUT_SUFFIX must contain only letters, digits, '_' or '-'" >&2
     exit 2
 }
-helper_download=$(mktemp -d "${TMPDIR:-/tmp}/prospero-lapy-helper.XXXXXX")
-trap 'rm -rf -- "$helper_download"' EXIT
-python3 "$root/tools/fetch_lapy_helper.py" \
-    --repo mpereiraesaa/PS5-Lapy-JB-Daemon --tag "$lapy_release" \
-    --sha256 "$lapy_elf_sha256" --out "$helper_download"
-lapy_helper_elf="$helper_download/lapy.elf"
+if [[ -n $lapy_helper_elf_override ]]; then
+    lapy_helper_elf="$lapy_helper_elf_override"
+    lapy_helper_manifest="$lapy_helper_manifest_override"
+    [[ -f $lapy_helper_elf && -f $lapy_helper_manifest ]] || {
+        echo "PW_LAPY_HELPER_ELF and PW_LAPY_HELPER_MANIFEST must both exist" >&2
+        exit 2
+    }
+else
+    helper_download=$(mktemp -d "${TMPDIR:-/tmp}/prospero-lapy-helper.XXXXXX")
+    trap 'rm -rf -- "$helper_download"' EXIT
+    python3 "$root/tools/fetch_lapy_helper.py" \
+        --repo mpereiraesaa/PS5-Lapy-JB-Daemon --tag "$lapy_release" \
+        --sha256 "$lapy_elf_sha256" --out "$helper_download"
+    lapy_helper_elf="$helper_download/lapy.elf"
+    lapy_helper_manifest="$helper_download/lapy-manifest.json"
+fi
 helper_magic=$(od -An -tx1 -N4 "$lapy_helper_elf" | tr -d ' \n')
 [[ $helper_magic == 7f454c46 ]] || {
-    echo "Lapy release $lapy_release helper is not an ELF file" >&2
+    echo "Lapy helper is not an ELF file" >&2
     exit 2
 }
-python3 - "$root" "$lapy_helper_elf" "$helper_download/lapy-manifest.json" \
+python3 - "$root" "$lapy_helper_elf" "$lapy_helper_manifest" \
     "$title_id" "$root/native/lapy_elevation_protocol.h" <<'PY'
 import json, pathlib, sys
 sys.path.insert(0, sys.argv[1])
@@ -170,8 +183,19 @@ build="$root/build/native$output_suffix"
 dist="$root/dist/$title_id$output_suffix"
 rm -rf -- "$build" "$dist"
 mkdir -p "$build/obj" "$build/import-stubs" "$dist/sce_sys" "$dist/sce_module"
-cp "$helper_download/release.json" "$build/lapy-helper-release.json"
-cp "$helper_download/lapy-manifest.json" "$build/lapy-helper-manifest.json"
+#cp "$helper_download/release.json" "$build/lapy-helper-release.json"
+#cp "$helper_download/lapy-manifest.json" "$build/lapy-helper-manifest.json"
+
+
+
+# release.json приходит только из fetch_lapy_helper.py; в ветке с
+# PW_LAPY_HELPER_ELF его нет, поэтому копируем условно.
+if [[ -n $helper_download ]]; then
+    cp "$helper_download/release.json" "$build/lapy-helper-release.json"
+    cp "$helper_download/lapy-manifest.json" "$build/lapy-helper-manifest.json"
+else
+    cp "$lapy_helper_manifest" "$build/lapy-helper-manifest.json"
+fi
 
 cc=(env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18")
 # A source archive has no Git metadata; its builds report "unknown".

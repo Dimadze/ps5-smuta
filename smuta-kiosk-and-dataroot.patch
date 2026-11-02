@@ -1,0 +1,117 @@
+diff -ru orig/native/wine64_main.c work2/native/wine64_main.c
+--- a/native/wine64_main.c	2026-11-01 23:38:47.682848492 +0000
++++ b/native/wine64_main.c	2026-11-02 04:14:54.652283665 +0000
+@@ -73,6 +73,12 @@
+ #ifndef PW_MANAGED_DESCRIPTOR_REQUIRED
+ #define PW_MANAGED_DESCRIPTOR_REQUIRED 0
+ #endif
++/* A non-empty profile id turns the title into a one-game kiosk: it starts that
++ * profile at once, without the launcher, and leaves to Home when the game
++ * ends. Set with PW_AUTOSTART_PROFILE=<id> when running tools/build_native.sh. */
++#ifndef PW_AUTOSTART_PROFILE
++#define PW_AUTOSTART_PROFILE ""
++#endif
+ 
+ /* The ID this process runs as, resolved at startup (src/pw_title_id.h):
+  * one shell binary serves every title a launcher makes on the console, and
+@@ -108,8 +114,12 @@
+ static char sandbox_app0[sizeof("/mnt/sandbox/_000/app0") + PW_TITLE_ID_SIZE];
+ static const char *const runtime_roots[] = { "/app0", sandbox_app0 };
+ /* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
++#ifndef PW_WINE64_ROOT_DATA
+ #define PW_WINE64_ROOT_DATA "/data/prospero-win"            /* when /data is granted */
++#endif
++#ifndef PW_WINE64_ROOT_SANDBOX
+ #define PW_WINE64_ROOT_SANDBOX "/download0/prospero-win"    /* sandbox fallback */
++#endif
+ #ifndef PW_WINE64_DEBUG
+ /* No +seh: WoW64 callback returns unwind with 80000026 many times a second
+  * and would flood the sink. */
+@@ -747,7 +757,7 @@
+     static char storage[2 * PW_WINE_LAUNCH_PATH_MAX + 64];
+     char *next[PW_WINE_LAUNCH_ARGS];
+ 
+-    if (per_game_mode) {
++    if (per_game_mode || PW_AUTOSTART_PROFILE[0]) {
+         PS5LOG_LOG("PW_WINE64 per-game title will exit reason=%s", reason);
+         return;
+     }
+@@ -793,7 +803,7 @@
+         restart_title(NULL, launch.cycle + 1u, "wine-exit");
+     }
+     pw_diagnostics_close("wine64-exit");
+-    if (per_game_mode) leave_to_home();
++    if (per_game_mode || PW_AUTOSTART_PROFILE[0]) leave_to_home();
+ }
+ 
+ /* ---- library ------------------------------------------------------------ */
+@@ -1353,6 +1363,17 @@
+         snprintf(launch.executable, sizeof(launch.executable), "%s", catalog[0].executable);
+     } else {
+         (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
++        if (PW_AUTOSTART_PROFILE[0] && launch.mode != PW_WINE_LAUNCH_GAME) {
++            /* Kiosk: skip the launcher. An unknown id leaves the launcher up. */
++            for (size_t i = 0; i < catalog_count; i++) {
++                if (strcmp(catalog[i].id, PW_AUTOSTART_PROFILE)) continue;
++                launch.mode = PW_WINE_LAUNCH_GAME;
++                launch.app = &catalog[i];
++                launch.refused = 0;
++                snprintf(launch.executable, sizeof(launch.executable), "%s", catalog[i].executable);
++                break;
++            }
++        }
+     }
+     if (!diagnostics_opened)
+         (void)pw_diagnostics_open(library_root, PW_BUILD_ID,
+diff -ru orig/tools/build_native.sh work2/tools/build_native.sh
+--- a/tools/build_native.sh	2026-11-01 23:38:47.688691500 +0000
++++ b/tools/build_native.sh	2026-11-02 04:14:54.652571004 +0000
+@@ -29,6 +29,12 @@
+ #   PW_WINE64_WAIT_WATCHDOG 1 turns on Wine's wait watchdog (patch 0680) in
+ #                          every game: a snapshot of the server's waits every
+ #                          two seconds, for diagnosing stalls (default 0)
++#   PW_DATA_ROOT_NAME      folder name under /data and /download0 for this
++#                          title's library (profiles/, prefixes/...);
++#                          default "prospero-win" -> /data/prospero-win
++#   PW_AUTOSTART_PROFILE   profile id to start at once, without the launcher;
++#                          the title leaves to Home when the game ends
++#                          (one-game kiosk, default empty = normal launcher)
+ #   PW_TITLE_PROBE         1 builds a probe that records how the title can
+ #                          learn its own ID into /app0/title-probe.txt and
+ #                          exits (step-0 console probe, default 0)
+@@ -55,6 +61,8 @@
+ wine64_cycles=${PW_WINE64_SCRIPT_CYCLES:-2}
+ wine64_watchdog=${PW_WINE64_WAIT_WATCHDOG:-0}
+ title_probe=${PW_TITLE_PROBE:-0}
++data_root_name=${PW_DATA_ROOT_NAME:-prospero-win}
++autostart_profile=${PW_AUTOSTART_PROFILE:-}
+ any_title=${PW_ANY_TITLE:-0}
+ title_id=${PW_TITLE_ID:-PPSA99995}
+ lapy_helper_elf=${PW_LAPY_HELPER_ELF:-}
+@@ -90,6 +98,14 @@
+     [[ $wine64_cycles =~ ^[1-9][0-9]{0,3}$ ]] || {
+     echo "PW_WINE64_SCRIPT must be 0 or 1, PW_WINE64_SECONDS a number and" \
+          "PW_WINE64_SCRIPT_CYCLES 1-9999" >&2; exit 2; }
++[[ $data_root_name =~ ^[A-Za-z0-9_-]+$ ]] || {
++    echo "PW_DATA_ROOT_NAME must contain only letters, digits, '_' or '-'" >&2
++    exit 2
++}
++[[ $autostart_profile =~ ^[A-Za-z0-9_.-]*$ ]] || {
++    echo "PW_AUTOSTART_PROFILE must contain only letters, digits, '_', '.' or '-'" >&2
++    exit 2
++}
+ [[ $output_suffix =~ ^[A-Za-z0-9_-]*$ ]] || {
+     echo "PW_OUTPUT_SUFFIX must contain only letters, digits, '_' or '-'" >&2
+     exit 2
+@@ -234,7 +250,10 @@
+         -DPW_MANAGED_DESCRIPTOR_REQUIRED="$managed_descriptor_required"
+         -DPW_WINE64_SCRIPT="$wine64_script" -DPW_WINE64_SECONDS="$wine64_seconds"
+         -DPW_WINE64_SCRIPT_CYCLES="$wine64_cycles" -DPW_WINE64_WAIT_WATCHDOG="$wine64_watchdog"
+-        -DPW_TITLE_PROBE="$title_probe")
++        -DPW_TITLE_PROBE="$title_probe"
++        -DPW_WINE64_ROOT_DATA=\"/data/"$data_root_name\"\"
++        -DPW_WINE64_ROOT_SANDBOX=\"/download0/"$data_root_name\"\"
++        -DPW_AUTOSTART_PROFILE=\""$autostart_profile"\")
+ 
+ sources=(
+     native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c

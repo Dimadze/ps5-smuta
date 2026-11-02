@@ -7,9 +7,9 @@
   "attribute": 0,
   "attribute2": 0,
   "attribute3": 64,
-  "conceptId": "99995",
+  "conceptId": "910001",
   "contentBadgeType": 1,
-  "contentId": "UP9000-PPSA99995_00-PROSPEROWIN00001",
+  "contentId": "UP9000-PPSA91001_00-PROSPEROWIN00001",
   "contentVersion": "01.000.000",
   "downloadDataSize": 256,
   "gameIntent": {
@@ -22,7 +22,10 @@
   "localizedParameters": {
     "defaultLanguage": "en-US",
     "en-US": {
-      "titleName": "Prospero Win"
+      "titleName": "Smuta"
+    },
+      "ru-RU": {
+      "titleName": "Смута"
     }
   },
   "masterVersion": "01.00",
@@ -32,6 +35,6 @@
   },
   "requiredSystemSoftwareVersion": "0x0000000000000000",
   "sdkVersion": "0x0000000000000000",
-  "titleId": "PPSA99995",
+  "titleId": "PPSA91001",
   "versionFileUri": ""
 }
